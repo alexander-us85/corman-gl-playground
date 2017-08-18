@@ -21,6 +21,7 @@
 #define GL_FRAGMENT_SHADER  0x8b30
 #define GL_VERTEX_SHADER    0x8b31
 #define GL_COMPILE_STATUS   0x8b81
+#define GL_LINK_STATUS      0x8b82
 
 typedef struct GLFWwindow GLFWwindow;
 typedef struct GLFWmonitor GLFWmonitor;
@@ -57,7 +58,12 @@ void glfwSetWindowShouldClose(GLFWwindow* window, int value);
       ("glLinkProgram" ((program :long)) :return-type :void)
       ("glUseProgram" ((program :long)) :return-type :void)
       ("glDeleteShader" ((shader :long)) :return-type :void)
-      ("glVertexAttribPointer" ((index :long) (size :long) (type :long) (normalized :long-bool) (stride :long) (pointer (:void *))) :return-type :void)
+      ("glVertexAttribPointer" ((index :long) 
+                                (size :long) 
+                                (type :long) 
+                                (normalized :long-bool) 
+                                (stride :long) 
+                                (pointer (:void *))) :return-type :void)
       ("glEnableVertexAttribArray" ((index :long)) :return-type :void)
       ("glGenVertexArrays" ((n :long) (arrays (:long *))) :return-type :void)
       ("glBindVertexArray" ((array :long)) :return-type :void)
@@ -67,7 +73,13 @@ void glfwSetWindowShouldClose(GLFWwindow* window, int value);
       ("glCompileShader" ((shader :unsigned-long)) :return-type :void)
       ("glGetShaderiv" ((shader :long) (pname :long) (params (:long *))) :return-type :void)
       ("glGetShaderInfoLog" ((shader :long) (maxlength :long) (length (:long *)) (log (:char *))) :return-type :void)
-      ("glDeleteShader" ((shader :long)) :return-type :void)))
+      ("glDeleteShader" ((shader :long)) :return-type :void)
+      ("glCreateProgram" () :return-type :long)
+      ("glAttachShader" ((program :long) (shader :long)) :return-type :void)
+      ("glLinkProgram" ((program :long)) :return-type :void)
+      ("glGetProgramiv" ((program :long) (pname :long) (params (:long *))) :return-type :void)
+      ("glGetProgramInfoLog" ((program :long) (size :long) (length (:long *)) (log (:char *))) :return-type :void)
+      ("glUseProgram" ((program :long)) :return-type :void)))
 
 (DEFPARAMETER *gl-pointer-func-options* '(:linkage-type :pascal))
 
@@ -77,14 +89,13 @@ void glfwSetWindowShouldClose(GLFWwindow* window, int value);
                (val `(ct:defun-pointer ,fname ,@(cdr item) ,@*gl-pointer-func-options*)))
             (setf (gethash fname *gl-ptr*) (glfwGetProcAddress (string (car item))))
             (eval val))))
-
-(eval-when (:execute)            
+          
 (DEFMACRO gl (gl-function &rest args)
     `(if (eql *gl-ptr* nil) (error "No current context or gl table is not populated")
         (let ((func-ptr (gethash ',gl-function *gl-ptr*)))
             (if (eql func-ptr nil) (error "Function address is not found ~a" gl-function)
               (,gl-function func-ptr ,@args)))))
-)
+
 (ct::DEFUN-C-CALLBACK viewport-size-callback ((win :long) (width :long) (height :long))
     (declare (ignore win))
     (gl |glViewport| 0 0 width height)
@@ -112,54 +123,79 @@ void glfwSetWindowShouldClose(GLFWwindow* window, int value);
             (read-sequence data stream)
             data)))
 
-(defmacro free-objects (objs)
+(DEFMACRO free-objects (&rest objs)
     (let ((items (loop for o in objs collect `(ct:free ,o))))
         `(progn ,@items)))
 
-(DEFUN do-me-a-shader (vertex-shader-path fragment-shader-path)
-  (let ((vertex-src   (ct:lisp-string-to-c-string (file-string vertex-shader-path)))
-        (fragment-src (ct:lisp-string-to-c-string (file-string fragment-shader-path)))
-        (shader-log   (ct:malloc (ct:sizeof '(:char 512))))
-        (vertex-obj   (ct:malloc (ct:sizeof :unsigned-long)))
-        (fragment-obj (ct:malloc (ct:sizeof :unsigned-long)))
-        (success      (ct:malloc (ct:sizeof :long))))
-        ;-------------------------------------------------------
-        (setf vertex-src-*   (ct:malloc (ct:sizeof '(:long 1))))
-        (setf fragment-src-* (ct:malloc (ct:sizeof '(:long 1))))
-        (setf (ct:cref (:long 1) vertex-src-*   0) (ct:foreign-ptr-to-int vertex-src))
-        (setf (ct:cref (:long 1) fragment-src-* 0) (ct:foreign-ptr-to-int fragment-src))
-        ;-------------------------------------------------------
-        (setf (ct:cref (:unsigned-long *) vertex-obj 0) (gl |glCreateShader| GL_VERTEX_SHADER))
-        (gl |glShaderSource| (ct:cref (:unsigned-long *) vertex-obj 0) 1 vertex-src-* NULL)
-        (gl |glCompileShader| (ct:cref (:unsigned-long *) vertex-obj 0))
-        (gl |glGetShaderiv| (ct:cref (:unsigned-long *) vertex-obj 0) GL_COMPILE_STATUS success)
-        (if (not (equal (ct:cref (:long 1) success 0) 1))
-            (progn (gl |glGetShaderInfoLog| (ct:cref (:unsigned-long *) vertex-obj 0) 512 NULL shader-log)
-                   (let ((log (ct:c-string-to-lisp-string shader-log)))
-                       (format t "VERTEX-SHADER-ERROR:~% ~a~%" log))))
-        ;-------------------------------------------------------
-        (setf (ct:cref (:unsigned-long *) fragment-obj 0) (gl |glCreateShader| GL_FRAGMENT_SHADER))
-        (gl |glShaderSource| (ct:cref (:unsigned-long *) fragment-obj 0) 1 fragment-src-* NULL)
-        (gl |glCompileShader| (ct:cref (:unsigned-long *) fragment-obj 0))
-        (gl |glGetShaderiv| (ct:cref (:unsigned-long *) fragment-obj 0) GL_COMPILE_STATUS success)
-        (if (not (equal (ct:cref (:long 1) success 0) 1))
-            (progn (gl |glGetShaderInfoLog| (ct:cref (:unsigned-long *) fragment-obj 0) 512 NULL shader-log)
-                   (let ((log (ct:c-string-to-lisp-string shader-log)))
-                       (format t "FRAGMENT-SHADER-ERROR:~% ~a~%" log))))
-        ;-------------------------------------------------------
-        (gl |glDeleteShader| (ct:cref (:unsigned-long *) fragment-obj 0))
-        (gl |glDeleteShader| (ct:cref (:unsigned-long *) fragment-obj 0))
-        
-        (free-objects (vertex-src fragment-src vertex-src-* fragment-src-* 
-                       shader-log vertex-obj   fragment-obj success))))
-        
-            
-      
-      
+(DEFMACRO with-foreign-objects (objects &rest forms)
+    (let ((items (loop for item in objects collect
+                    (let* ((name (car item))
+                           (type (cadr item)))
+                        (if (consp type)
+                            `(,name (ct:malloc (ct:sizeof ',type)))
+                            `(,name (ct:malloc (ct:sizeof ,type)))))))
+          (items-to-free (loop for item in objects collect (car item))))
+        `(let ,items ,@(butlast forms) (free-objects ,@items-to-free) ,(car (last forms)))))
+
+(DEFMACRO new (name)
+    `(setf ,name (ct:malloc (ct:sizeof :long))))
+
+(DEFMACRO ! (item value)
+    `(setf (ct:cref (:long 1) ,item 0) ,value))
+
+(DEFMACRO ? (item)
+    `(ct:cref (:long 1) ,item 0))
+
+(DEFUN create-shader (vertex-path fragment-path)
+    (with-foreign-objects ((shader-log ( :char 512))
+                           (vertex-obj   :unsigned-long)
+                           (fragment-obj :unsigned-long)
+                           (success      :long)
+                           (vertex-src   :long)
+                           (fragment-src :long))
+            (! vertex-src (ct:foreign-ptr-to-int
+                           (ct:lisp-string-to-c-string (file-string vertex-path))))
+            (! fragment-src (ct:foreign-ptr-to-int
+                             (ct:lisp-string-to-c-string (file-string fragment-path))))
+            ;--------------------------------------------------------------------------
+            (! vertex-obj (gl |glCreateShader| GL_VERTEX_SHADER))
+            (gl |glShaderSource| (? vertex-obj) 1 vertex-src NULL)
+            (gl |glCompileShader| (? vertex-obj))
+            (gl |glGetShaderiv| (? vertex-obj) GL_COMPILE_STATUS success)
+            (if (not (equal (? success) 1))
+                (progn (gl |glGetShaderInfoLog| (? vertex-obj) 512 NULL shader-log)
+                    (let ((log (ct:c-string-to-lisp-string shader-log)))
+                        (format t "VERTEX-SHADER-ERROR:~%~A~%" log))))
+            ;--------------------------------------------------------------------------
+            (! fragment-obj (gl |glCreateShader| GL_FRAGMENT_SHADER))
+            (gl |glShaderSource| (? fragment-obj) 1 fragment-src NULL)
+            (gl |glCompileShader| (? fragment-obj))
+            (gl |glGetShaderiv| (? fragment-obj) GL_COMPILE_STATUS success)
+            (if (not (equal (? success) 1))
+                (progn (gl |glGetShaderInfoLog| (? fragment-obj) 512 NULL shader-log)
+                    (let ((log (ct:c-string-to-lisp-string shader-log)))
+                        (format t "FRAGMENT-SHADER-ERROR:~%~A~%" log))))
+            ;--------------------------------------------------------------------------
+            (new program)
+            (! program (gl |glCreateProgram|))
+            (gl |glAttachShader| (? program) (? vertex-obj))
+            (gl |glAttachShader| (? program) (? fragment-obj))
+            (gl |glLinkProgram|  (? program))
+            (gl |glGetProgramiv| (? program) GL_LINK_STATUS success)
+            (if (not (equal (? success) 1))
+                (progn (gl |glGetProgramInfoLog| (? program) 512 NULL shader-log)
+                    (let ((log (ct:c-string-to-lisp-string shader-log)))
+                        (format t "PROGRAM-LINK-ERROR:~%~A~%" log))))
+            (gl |glDeleteShader| (? vertex-obj))
+            (gl |glDeleteShader| (? fragment-obj))
+            program))
+                               
 
 (DEFUN render-loop (window)
     (let ((VBO (ct:malloc (ct:sizeof :long)))
-          (VAO (ct:malloc (ct:sizeof :long))))
+          (VAO (ct:malloc (ct:sizeof :long)))
+          (shader (create-shader "C:\\Users\\PlariumCrew\\Documents\\Corman Lisp\\vertex.v"
+                                 "C:\\Users\\PlariumCrew\\Documents\\Corman Lisp\\fragment.f")))
                 (gl |glGenVertexArrays| 1 VAO)
                 (gl |glGenBuffers|      1 VBO)
                 (gl |glBindVertexArray| (ct:cref (:long *) VAO 0))
@@ -173,7 +209,8 @@ void glfwSetWindowShouldClose(GLFWwindow* window, int value);
                                     (process-input window)
                                     (gl |glViewport|   0 0 300 300)
                                     (gl |glClearColor| 1.0 0.7 0.2 1.0)
-                                    (gl |glClear|      GL_COLOR_BUFFER_BIT)                           
+                                    (gl |glClear|      GL_COLOR_BUFFER_BIT)
+                                    (gl |glUseProgram| (? shader))                           
                                     (gl |glDrawArrays| GL_TRIANGLES 0 3)
                                     (glfwSwapBuffers window)
                                     (glfwPollEvents))))
@@ -203,3 +240,5 @@ void glfwSetWindowShouldClose(GLFWwindow* window, int value);
                     (glfwSetFramebufferSizeCallback window (ct:get-callback-procinst 'viewport-size-callback))                                                                                
                     (render-loop window)))
         (glfwTerminate))))
+
+
